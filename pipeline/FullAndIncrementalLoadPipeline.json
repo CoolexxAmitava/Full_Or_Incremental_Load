@@ -3,7 +3,7 @@
 	"properties": {
 		"activities": [
 			{
-				"name": "LookupActivity",
+				"name": "Lookup Activity",
 				"type": "Lookup",
 				"dependsOn": [],
 				"policy": {
@@ -38,11 +38,11 @@
 				}
 			},
 			{
-				"name": "ForEach Activity",
+				"name": "For Each Activity",
 				"type": "ForEach",
 				"dependsOn": [
 					{
-						"activity": "LookupActivity",
+						"activity": "Lookup Activity",
 						"dependencyConditions": [
 							"Succeeded"
 						]
@@ -51,7 +51,7 @@
 				"userProperties": [],
 				"typeProperties": {
 					"items": {
-						"value": "@activity('LookupActivity').output.value",
+						"value": "@activity('Lookup Activity').output.value",
 						"type": "Expression"
 					},
 					"activities": [
@@ -115,13 +115,18 @@
 												}
 											}
 										]
-									}
-								],
-								"ifTrueActivities": [
+									},
 									{
-										"name": "Lookup Incremental",
+										"name": "Full Load Lookup Target Table Max Added Date",
 										"type": "Lookup",
-										"dependsOn": [],
+										"dependsOn": [
+											{
+												"activity": "Copy data Full Load",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
 										"policy": {
 											"timeout": "7.00:00:00",
 											"retry": 0,
@@ -133,29 +138,26 @@
 										"typeProperties": {
 											"source": {
 												"type": "AzureSqlSource",
-												"sqlReaderQuery": {
-													"value": "select substring(convert(varchar(30),Max_Last_Updated_Date,120),0,11) from dbo.configuration_table where Table_Name like '@{item().Table_Name}';",
-													"type": "Expression"
-												},
+												"sqlReaderQuery": "select max(added_date) as upd_date from @{item().Table_Name};",
 												"queryTimeout": "02:00:00",
 												"partitionOption": "None"
 											},
 											"dataset": {
-												"referenceName": "SourceDataset",
+												"referenceName": "TargetDataset",
 												"type": "DatasetReference",
 												"parameters": {
-													"inputTableName": "configuration_table"
+													"outputTableName": "@item().Table_Name"
 												}
 											},
-											"firstRowOnly": false
+											"firstRowOnly": true
 										}
 									},
 									{
-										"name": "Copy data Incremental",
-										"type": "Copy",
+										"name": "Full Load Update Conf Table Date",
+										"type": "Lookup",
 										"dependsOn": [
 											{
-												"activity": "Lookup Incremental",
+												"activity": "Full Load Lookup Target Table Max Added Date",
 												"dependencyConditions": [
 													"Succeeded"
 												]
@@ -173,7 +175,85 @@
 											"source": {
 												"type": "AzureSqlSource",
 												"sqlReaderQuery": {
-													"value": "select * from @{item().Table_Name} where substring(convert(varchar(30),added_date,120),0,11) > @{activity('Lookup Incremental').output.value};",
+													"value": "update @{pipeline().parameters.cfgTableName} set Max_Last_Updated_Date='@{activity('Full Load Lookup Target Table Max Added Date').output.firstRow.upd_date}',Incremental_Full_Load=1 where Table_Name='@{item().Table_Name}';\n\nselect getdate();\n\n",
+													"type": "Expression"
+												},
+												"queryTimeout": "02:00:00",
+												"partitionOption": "None"
+											},
+											"dataset": {
+												"referenceName": "TargetDataset",
+												"type": "DatasetReference",
+												"parameters": {
+													"outputTableName": {
+														"value": "@pipeline().parameters.cfgTableName",
+														"type": "Expression"
+													}
+												}
+											}
+										}
+									}
+								],
+								"ifTrueActivities": [
+									{
+										"name": "Lookup Incremental Load",
+										"type": "Lookup",
+										"dependsOn": [],
+										"policy": {
+											"timeout": "7.00:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "AzureSqlSource",
+												"sqlReaderQuery": {
+													"value": "select substring(convert(varchar(30),Max_Last_Updated_Date+1,120),0,11) as date_comp from @{pipeline().parameters.cfgTableName} where Table_Name = '@{item().Table_Name}';",
+													"type": "Expression"
+												},
+												"queryTimeout": "02:00:00",
+												"partitionOption": "None"
+											},
+											"dataset": {
+												"referenceName": "TargetDataset",
+												"type": "DatasetReference",
+												"parameters": {
+													"outputTableName": {
+														"value": "@pipeline().parameters.cfgTableName",
+														"type": "Expression"
+													}
+												}
+											},
+											"firstRowOnly": true
+										}
+									},
+									{
+										"name": "Copy data Incremental Load",
+										"type": "Copy",
+										"dependsOn": [
+											{
+												"activity": "Lookup Incremental Load",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "7.00:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "AzureSqlSource",
+												"sqlReaderQuery": {
+													"value": "select * from @{item().Table_Name} where substring(convert(varchar(30),added_date,120),0,11) = '@{activity('Lookup Incremental Load').output.firstRow.date_comp}';\n\n",
 													"type": "Expression"
 												},
 												"queryTimeout": "02:00:00",
@@ -213,6 +293,83 @@
 												}
 											}
 										]
+									},
+									{
+										"name": "Incremental Load Lookup Target Table Max Added Date",
+										"type": "Lookup",
+										"dependsOn": [
+											{
+												"activity": "Copy data Incremental Load",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "7.00:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "AzureSqlSource",
+												"sqlReaderQuery": "select max(added_date) as upd_date from @{item().Table_Name}",
+												"queryTimeout": "02:00:00",
+												"partitionOption": "None"
+											},
+											"dataset": {
+												"referenceName": "TargetDataset",
+												"type": "DatasetReference",
+												"parameters": {
+													"outputTableName": "@item().Table_Name"
+												}
+											},
+											"firstRowOnly": true
+										}
+									},
+									{
+										"name": "Incremental Load Update Conf Table Date",
+										"type": "Lookup",
+										"dependsOn": [
+											{
+												"activity": "Incremental Load Lookup Target Table Max Added Date",
+												"dependencyConditions": [
+													"Succeeded"
+												]
+											}
+										],
+										"policy": {
+											"timeout": "7.00:00:00",
+											"retry": 0,
+											"retryIntervalInSeconds": 30,
+											"secureOutput": false,
+											"secureInput": false
+										},
+										"userProperties": [],
+										"typeProperties": {
+											"source": {
+												"type": "AzureSqlSource",
+												"sqlReaderQuery": {
+													"value": "update @{pipeline().parameters.cfgTableName} set Max_Last_Updated_Date='@{activity('Incremental Load Lookup Target Table Max Added Date').output.firstRow.upd_date }' where Table_Name='@{item().Table_Name}';\n\nselect getdate();\n\n",
+													"type": "Expression"
+												},
+												"queryTimeout": "02:00:00",
+												"partitionOption": "None"
+											},
+											"dataset": {
+												"referenceName": "TargetDataset",
+												"type": "DatasetReference",
+												"parameters": {
+													"outputTableName": {
+														"value": "@pipeline().parameters.cfgTableName",
+														"type": "Expression"
+													}
+												}
+											}
+										}
 									}
 								]
 							}
