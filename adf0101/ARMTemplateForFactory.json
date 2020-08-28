@@ -1,0 +1,509 @@
+{
+	"$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"factoryName": {
+			"type": "string",
+			"metadata": "Data Factory name",
+			"defaultValue": "adf0101"
+		},
+		"SourceLinkedService_connectionString": {
+			"type": "secureString",
+			"metadata": "Secure string for 'connectionString' of 'SourceLinkedService'"
+		},
+		"TargetLinkedService_connectionString": {
+			"type": "secureString",
+			"metadata": "Secure string for 'connectionString' of 'TargetLinkedService'"
+		}
+	},
+	"variables": {
+		"factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+	},
+	"resources": [
+		{
+			"name": "[concat(parameters('factoryName'), '/FullAndIncrementalLoadPipeline')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"activities": [
+					{
+						"name": "Lookup Activity",
+						"type": "Lookup",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"source": {
+								"type": "AzureSqlSource",
+								"sqlReaderQuery": {
+									"value": "select * from @{pipeline().parameters.cfgTableName} where Active_Indicator =1;",
+									"type": "Expression"
+								},
+								"queryTimeout": "02:00:00",
+								"partitionOption": "None"
+							},
+							"dataset": {
+								"referenceName": "TargetDataset",
+								"type": "DatasetReference",
+								"parameters": {
+									"outputTableName": {
+										"value": "@pipeline().parameters.cfgTableName",
+										"type": "Expression"
+									}
+								}
+							},
+							"firstRowOnly": false
+						}
+					},
+					{
+						"name": "For Each Activity",
+						"type": "ForEach",
+						"dependsOn": [
+							{
+								"activity": "Lookup Activity",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@activity('Lookup Activity').output.value",
+								"type": "Expression"
+							},
+							"activities": [
+								{
+									"name": "If Condition Activity",
+									"type": "IfCondition",
+									"dependsOn": [],
+									"userProperties": [],
+									"typeProperties": {
+										"expression": {
+											"value": "@equals(item().Incremental_Full_Load,1)",
+											"type": "Expression"
+										},
+										"ifFalseActivities": [
+											{
+												"name": "Copy data Full Load",
+												"type": "Copy",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "7.00:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "AzureSqlSource",
+														"queryTimeout": "02:00:00",
+														"partitionOption": "None"
+													},
+													"sink": {
+														"type": "AzureSqlSink"
+													},
+													"enableStaging": false,
+													"translator": {
+														"type": "TabularTranslator",
+														"typeConversion": true,
+														"typeConversionSettings": {
+															"allowDataTruncation": true,
+															"treatBooleanAsNumber": false
+														}
+													}
+												},
+												"inputs": [
+													{
+														"referenceName": "SourceDataset",
+														"type": "DatasetReference",
+														"parameters": {
+															"inputTableName": "@item().Table_Name"
+														}
+													}
+												],
+												"outputs": [
+													{
+														"referenceName": "TargetDataset",
+														"type": "DatasetReference",
+														"parameters": {
+															"outputTableName": "@item().Table_Name"
+														}
+													}
+												]
+											},
+											{
+												"name": "Full Load Lookup Target Table Max Added Date",
+												"type": "Lookup",
+												"dependsOn": [
+													{
+														"activity": "Copy data Full Load",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "7.00:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "AzureSqlSource",
+														"sqlReaderQuery": {
+															"value": "select max(added_date) as upd_date from @{item().Table_Name};",
+															"type": "Expression"
+														},
+														"queryTimeout": "02:00:00",
+														"partitionOption": "None"
+													},
+													"dataset": {
+														"referenceName": "TargetDataset",
+														"type": "DatasetReference",
+														"parameters": {
+															"outputTableName": "@item().Table_Name"
+														}
+													},
+													"firstRowOnly": true
+												}
+											},
+											{
+												"name": "Full Load Update Conf Table Date",
+												"type": "Lookup",
+												"dependsOn": [
+													{
+														"activity": "Full Load Lookup Target Table Max Added Date",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "7.00:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "AzureSqlSource",
+														"sqlReaderQuery": {
+															"value": "update @{pipeline().parameters.cfgTableName} set Max_Last_Updated_Date='@{activity('Full Load Lookup Target Table Max Added Date').output.firstRow.upd_date}',Incremental_Full_Load=1 where Table_Name='@{item().Table_Name}';\n\nselect getdate();\n\n",
+															"type": "Expression"
+														},
+														"queryTimeout": "02:00:00",
+														"partitionOption": "None"
+													},
+													"dataset": {
+														"referenceName": "TargetDataset",
+														"type": "DatasetReference",
+														"parameters": {
+															"outputTableName": {
+																"value": "@pipeline().parameters.cfgTableName",
+																"type": "Expression"
+															}
+														}
+													}
+												}
+											}
+										],
+										"ifTrueActivities": [
+											{
+												"name": "Lookup Incremental Load",
+												"type": "Lookup",
+												"dependsOn": [],
+												"policy": {
+													"timeout": "7.00:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "AzureSqlSource",
+														"sqlReaderQuery": {
+															"value": "select substring(convert(varchar(30),Max_Last_Updated_Date+1,120),0,11) as date_comp from @{pipeline().parameters.cfgTableName} where Table_Name = '@{item().Table_Name}';",
+															"type": "Expression"
+														},
+														"queryTimeout": "02:00:00",
+														"partitionOption": "None"
+													},
+													"dataset": {
+														"referenceName": "TargetDataset",
+														"type": "DatasetReference",
+														"parameters": {
+															"outputTableName": {
+																"value": "@pipeline().parameters.cfgTableName",
+																"type": "Expression"
+															}
+														}
+													},
+													"firstRowOnly": true
+												}
+											},
+											{
+												"name": "Copy data Incremental Load",
+												"type": "Copy",
+												"dependsOn": [
+													{
+														"activity": "Lookup Incremental Load",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "7.00:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "AzureSqlSource",
+														"sqlReaderQuery": {
+															"value": "select * from @{item().Table_Name} where substring(convert(varchar(30),added_date,120),0,11) = '@{activity('Lookup Incremental Load').output.firstRow.date_comp}';\n\n",
+															"type": "Expression"
+														},
+														"queryTimeout": "02:00:00",
+														"partitionOption": "None"
+													},
+													"sink": {
+														"type": "AzureSqlSink"
+													},
+													"enableStaging": false,
+													"translator": {
+														"type": "TabularTranslator",
+														"typeConversion": true,
+														"typeConversionSettings": {
+															"allowDataTruncation": true,
+															"treatBooleanAsNumber": false
+														}
+													}
+												},
+												"inputs": [
+													{
+														"referenceName": "SourceDataset",
+														"type": "DatasetReference",
+														"parameters": {
+															"inputTableName": "@item().Table_Name"
+														}
+													}
+												],
+												"outputs": [
+													{
+														"referenceName": "TargetDataset",
+														"type": "DatasetReference",
+														"parameters": {
+															"outputTableName": {
+																"value": "@item().Table_Name",
+																"type": "Expression"
+															}
+														}
+													}
+												]
+											},
+											{
+												"name": "Incremental Load Lookup Target Table Max Added Date",
+												"type": "Lookup",
+												"dependsOn": [
+													{
+														"activity": "Copy data Incremental Load",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "7.00:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "AzureSqlSource",
+														"sqlReaderQuery": {
+															"value": "select max(added_date) as upd_date from @{item().Table_Name}",
+															"type": "Expression"
+														},
+														"queryTimeout": "02:00:00",
+														"partitionOption": "None"
+													},
+													"dataset": {
+														"referenceName": "TargetDataset",
+														"type": "DatasetReference",
+														"parameters": {
+															"outputTableName": "@item().Table_Name"
+														}
+													},
+													"firstRowOnly": true
+												}
+											},
+											{
+												"name": "Incremental Load Update Conf Table Date",
+												"type": "Lookup",
+												"dependsOn": [
+													{
+														"activity": "Incremental Load Lookup Target Table Max Added Date",
+														"dependencyConditions": [
+															"Succeeded"
+														]
+													}
+												],
+												"policy": {
+													"timeout": "7.00:00:00",
+													"retry": 0,
+													"retryIntervalInSeconds": 30,
+													"secureOutput": false,
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"source": {
+														"type": "AzureSqlSource",
+														"sqlReaderQuery": {
+															"value": "update @{pipeline().parameters.cfgTableName} set Max_Last_Updated_Date='@{activity('Incremental Load Lookup Target Table Max Added Date').output.firstRow.upd_date }' where Table_Name='@{item().Table_Name}';\n\nselect getdate();\n\n",
+															"type": "Expression"
+														},
+														"queryTimeout": "02:00:00",
+														"partitionOption": "None"
+													},
+													"dataset": {
+														"referenceName": "TargetDataset",
+														"type": "DatasetReference",
+														"parameters": {
+															"outputTableName": {
+																"value": "@pipeline().parameters.cfgTableName",
+																"type": "Expression"
+															}
+														}
+													}
+												}
+											}
+										]
+									}
+								}
+							]
+						}
+					}
+				],
+				"parameters": {
+					"cfgTableName": {
+						"type": "string",
+						"defaultValue": "dbo.configuration_table"
+					}
+				},
+				"annotations": []
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/datasets/TargetDataset')]",
+				"[concat(variables('factoryId'), '/datasets/SourceDataset')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/SourceDataset')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "SourceLinkedService",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"inputTableName": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "AzureSqlTable",
+				"schema": [],
+				"typeProperties": {
+					"schema": "dbo",
+					"table": {
+						"value": "@dataset().inputTableName",
+						"type": "Expression"
+					}
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/SourceLinkedService')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/TargetDataset')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "TargetLinkedService",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"outputTableName": {
+						"type": "string"
+					}
+				},
+				"annotations": [],
+				"type": "AzureSqlTable",
+				"schema": [],
+				"typeProperties": {
+					"schema": "dbo",
+					"table": {
+						"value": "@dataset().outputTableName",
+						"type": "Expression"
+					}
+				}
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/linkedServices/TargetLinkedService')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/SourceLinkedService')]",
+			"type": "Microsoft.DataFactory/factories/linkedServices",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"annotations": [],
+				"type": "AzureSqlDatabase",
+				"typeProperties": {
+					"connectionString": "[parameters('SourceLinkedService_connectionString')]"
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/TargetLinkedService')]",
+			"type": "Microsoft.DataFactory/factories/linkedServices",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"annotations": [],
+				"type": "AzureSqlDatabase",
+				"typeProperties": {
+					"connectionString": "[parameters('TargetLinkedService_connectionString')]"
+				}
+			},
+			"dependsOn": []
+		}
+	]
+}
