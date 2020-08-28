@@ -1,5 +1,5 @@
 # Full_Or_Incremental_Load
-#### GET The process Details & Design Medium.com
+#### GET The process Details & Design Medium.com: https://medium.com/@apu.nandi88/full-and-incremental-data-loading-concept-from-source-to-destination-using-azure-data-factory-dd39627d6f21
 ###### Run SQL Query
 ---------------- Create & Insert Data into configuration_table ----------------------------[Target System]
 create table dbo.configuration_table( Table_Name varchar(100),
