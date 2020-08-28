@@ -1,0 +1,24 @@
+{
+	"name": "SourceDataset",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "SourceLinkedService",
+			"type": "LinkedServiceReference"
+		},
+		"parameters": {
+			"inputTableName": {
+				"type": "string"
+			}
+		},
+		"annotations": [],
+		"type": "AzureSqlTable",
+		"schema": [],
+		"typeProperties": {
+			"schema": "dbo",
+			"table": {
+				"value": "@dataset().inputTableName",
+				"type": "Expression"
+			}
+		}
+	}
+}

@@ -1,0 +1,24 @@
+{
+	"name": "TargetDataset",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "TargetLinkedService",
+			"type": "LinkedServiceReference"
+		},
+		"parameters": {
+			"outputTableName": {
+				"type": "string"
+			}
+		},
+		"annotations": [],
+		"type": "AzureSqlTable",
+		"schema": [],
+		"typeProperties": {
+			"schema": "dbo",
+			"table": {
+				"value": "@dataset().outputTableName",
+				"type": "Expression"
+			}
+		}
+	}
+}
